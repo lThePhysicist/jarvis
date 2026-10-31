@@ -84,8 +84,10 @@ function parseWhen(text) {
 const hhmm = (d) => d.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
 
 /* ---------------- intents ---------------- */
+const history = [];
+const PREFIX = /^(?:(?:hey|ok|okay)\s+)?(?:jarvis\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:(?:i\s+want\s+(?:you\s+)?to|i\s+need\s+(?:you\s+)?to)\s+)?/;
 async function handle(raw) {
-  const f = fold(raw);
+  const f = fold(raw).replace(PREFIX, "").replace(/\s+please$/, "").trim();
   $("heard").textContent = raw; setOrb("thinking");
   try {
     let m;
@@ -112,7 +114,7 @@ async function handle(raw) {
     }
     if (/\b(?:my notes|what do you remember|read my notes)\b/.test(f)) return listNotes(true);
     // navigation
-    if ((m = f.match(/^(?:(?:create|make|plan|find|get|show|give)\s+(?:me\s+)?(?:a\s+)?(?:route|directions|the way)|route|directions|navigate|take me|drive|walk|how do i get|guide me)\s+(?:me\s+)?(?:to|towards|for)\s+(?:the\s+|a\s+)?(.+)$/)) ||
+    if ((m = f.match(/^(?:(?:create|make|plan|find|get|show|give|draw|build|open|start)\s+(?:me\s+)?(?:a\s+|the\s+)?(?:route|road|path|directions|way|navigation)|route|directions|navigate|take me|drive|walk|how do i get|guide me|go)\s+(?:me\s+)?(?:to|towards|for)\s+(?:the\s+|a\s+)?(.+)$/)) ||
         (m = f.match(/^(?:where is\s+|find\s+)?(?:the\s+)?((?:nearest|closest)\s+.+)$/))) {
       const mode = /^walk|on foot|walking/.test(f) ? "foot" : "car";
       return startNav(m[1].replace(/^(nearest|closest)\s+/, "nearest "), mode);
@@ -133,11 +135,36 @@ async function handle(raw) {
     // questions -> Wikipedia
     if ((m = f.match(/^(?:what|who)\s+(?:is|are|was|were)\s+(?:a\s+|an\s+|the\s+)?(.+)$/)) || (m = f.match(/^(?:tell me about|search|explain|define)\s+(.+)$/)))
       return wiki(m[1]);
-    // anything else: let the PC's brain handle it if it is on
-    return sendToPC(raw, true);
+    // anything else: the phone's own AI brain (Supabase Edge Function -> Gemini)
+    return askBrain(raw);
   } catch (e) {
     console.error(e); say("Something went wrong: " + (e.message || e));
   }
+}
+
+async function askBrain(text) {
+  const { data, error } = await sb.functions.invoke("ask", {
+    body: { text, history, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, now: new Date().toISOString() } });
+  if (error || !data || data.error) {
+    const msg = (data && data.error) || (error && error.message) || "unknown";
+    return say("My AI brain isn't reachable right now (" + msg.slice(0, 80) + ").");
+  }
+  history.push({ role: "user", text }, { role: "assistant", text: data.say || "" });
+  history.splice(0, Math.max(0, history.length - 12));
+  const a = data.action;
+  if (a && a.type === "route") return startNav(a.target, a.mode === "foot" ? "foot" : "car");
+  if (a && a.type === "reminder" && a.due) {
+    const due = new Date(a.due);
+    await sb.from("reminders").insert({ text: a.text, due_at: due.toISOString(), source: "phone" });
+    scheduleLocal(a.text, due);
+  }
+  if (a && a.type === "note") await sb.from("notes").insert({ text: a.text, source: "phone" });
+  if (a && a.type === "pc") return sendToPC(a.text);
+  if (a && a.type === "music") {
+    location.href = a.app === "youtube" ? "https://www.youtube.com/results?search_query=" + encodeURIComponent(a.query)
+                                        : "spotify:search:" + encodeURIComponent(a.query);
+  }
+  say(data.say || "Done.");
 }
 
 async function sendToPC(text, fallback) {
@@ -155,7 +182,7 @@ async function sendToPC(text, fallback) {
 
 async function wiki(q) {
   const r = await fetch("https://en.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(q.trim()));
-  if (!r.ok) return sendToPC("what is " + q, true);
+  if (!r.ok) return askBrain("What is " + q + "?");
   const d = await r.json();
   const first = (d.extract || "").split(/(?<=[.!?])\s+/).slice(0, 2).join(" ");
   say(first || "I couldn't find that.", { title: d.title, body: d.extract });
@@ -232,6 +259,9 @@ async function briefing() {
 }
 
 /* ---------------- navigation ---------------- */
+const SHOPS = { market: [["supermarket", "convenience store"], ["supermarket", "convenience"]],
+  grocery: [["supermarket", "convenience store"], ["supermarket", "convenience"]], "grocery store": [["supermarket", "convenience store"], ["supermarket", "convenience"]],
+  supermarket: [["supermarket"], ["supermarket"]], "convenience store": [["convenience store"], ["convenience"]], bakery: [["bakery"], ["bakery"]] };
 const CAT = { "gas station": "fuel", "petrol station": "fuel", fuel: "fuel", gas: "fuel", pharmacy: "pharmacy", hospital: "hospital",
   atm: "atm", bank: "bank", cafe: "cafe", coffee: "cafe", "coffee shop": "cafe", restaurant: "restaurant", parking: "parking",
   "charging station": "charging_station", police: "police", toilet: "toilets", "post office": "post_office" };
@@ -243,12 +273,16 @@ const fmtD = (m) => m >= 1000 ? (m / 1000).toFixed(1) + " km" : Math.round(m / 1
 const fmtT = (s) => { const m = Math.max(1, Math.round(s / 60)); return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`; };
 
 async function findDest(q, pos) {
-  const f = fold(q).replace(/^nearest /, ""), cat = CAT[f] || CAT[f.replace(/s$/, "")];
-  if (q.startsWith("nearest") || cat) {
+  let f = fold(q).replace(/^(?:nearest|closest) /, "");
+  if (!CAT[f] && !SHOPS[f] && f.endsWith("s")) f = f.slice(0, -1);
+  const cat = CAT[f], shop = SHOPS[f];
+  if (/^(?:nearest|closest)/.test(fold(q)) || cat || shop) {
     for (const d of [0.03, 0.1, 0.3]) {
       const vb = `${pos[1] - d * 1.4},${pos[0] + d},${pos[1] + d * 1.4},${pos[0] - d}`;
-      const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=25&bounded=1&viewbox=${vb}&` + (cat ? "amenity=" + cat : "q=" + encodeURIComponent(f));
-      const res = await (await fetch(url)).json();
+      const base = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=40&bounded=1&viewbox=${vb}&`;
+      const qs = cat ? ["amenity=" + cat] : shop ? shop[0].map(x => "q=" + encodeURIComponent(x)) : ["q=" + encodeURIComponent(f)];
+      let res = (await Promise.all(qs.map(x => fetch(base + x).then(r => r.json())))).flat();
+      if (shop) res = res.filter(x => shop[1].includes(x.type));
       if (res.length) {
         const best = res.map(x => ({ name: x.name || f, at: [+x.lat, +x.lon] })).sort((a, b) => km(pos, a.at) - km(pos, b.at))[0];
         return best;
@@ -358,8 +392,7 @@ const HELP = `Talk or type:
 • Route to the nearest gas station · Walk to the nearest pharmacy · Navigate to Kadıköy
 • Play Daft Punk on Spotify · Play lofi on YouTube
 • Pause the music on my PC · On my PC open Spotify
-• What is a black hole? · Who is Tesla?
-Anything else goes to your PC's Jarvis when it is on.`;
+• What is a black hole? · Plan my study day · Anything else — Jarvis thinks it through.`;
 
 /* ---------------- wiring ---------------- */
 async function boot() {
