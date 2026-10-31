@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Jarvis">
+<meta name="theme-color" content="#030a10">
+<title>Jarvis</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- login -->
+<section id="login" hidden>
+  <div class="orb small"></div>
+  <h1>JARVIS</h1>
+  <form id="loginForm">
+    <input id="email" type="email" placeholder="E-mail" autocomplete="username" required>
+    <input id="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+    <p id="loginMsg" class="msg"></p>
+  </form>
+</section>
+
+<!-- main -->
+<section id="main" hidden>
+  <header>
+    <span class="brand">JARVIS</span>
+    <span id="pcDot" class="dot" title="PC"></span>
+    <button id="briefBtn" class="chip">Brief</button>
+    <button id="menuBtn" class="chip">☰</button>
+  </header>
+
+  <div id="hud">
+    <button id="orb" class="orb" aria-label="Talk"><span></span></button>
+    <div id="state">Tap the orb and speak</div>
+    <div id="heard" class="heard"></div>
+    <div id="reply" class="reply"></div>
+  </div>
+
+  <div id="card" class="card" hidden></div>
+
+  <form id="typeForm">
+    <input id="typeInput" placeholder="Type a command…" autocomplete="off">
+  </form>
+
+  <nav id="tabs">
+    <button data-view="reminders">Reminders</button>
+    <button data-view="notes">Notes</button>
+    <button data-view="help">Commands</button>
+  </nav>
+  <div id="panel" class="panel" hidden></div>
+</section>
+
+<!-- navigation -->
+<section id="nav" hidden>
+  <div id="map"></div>
+  <div id="navTop">
+    <div id="navArrow">↑</div>
+    <div><div id="navInstr">Calculating…</div><div id="navSub"></div></div>
+  </div>
+  <div id="navBottom">
+    <div id="navEta"></div>
+    <div class="row">
+      <button id="navGoogle" class="chip">Google</button>
+      <button id="navWaze" class="chip">Waze</button>
+      <button id="navYandex" class="chip">Yandex</button>
+      <button id="navMute" class="chip">🔊</button>
+      <button id="navEnd" class="chip danger">End</button>
+    </div>
+  </div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
