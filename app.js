@@ -1,12 +1,20 @@
 /* Jarvis phone app (PWA). Talks to the same Supabase project as the PC.
    Everything except Supabase, OpenStreetMap services, Wikipedia and Open-Meteo stays on the phone. */
 "use strict";
+const VERSION = "3";
 const SUPABASE_URL = "https://qmnxooigacnudpknrdzg.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtbnhvb2lnYWNudWRwa25yZHpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0ODI0MDksImV4cCI6MjEwOTA1ODQwOX0.t7bKeaHAeXyHvt1zVFqOECSI7ndPiHfEKhXd9IRbkXI";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON, { auth: { persistSession: true, autoRefreshToken: true } });
 const $ = (id) => document.getElementById(id);
 const fold = (s) => (s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/ı/g, "i").toLowerCase()
   .replace(/[’'"“”.,!?;:]/g, " ").replace(/\s+/g, " ").trim();
+
+/* ---------------- diagnostics: what happened, saved to your own Supabase (events table) ---------------- */
+function logEvent(kind, detail) {
+  sb.from("events").insert({ kind, detail: String(detail || "").slice(0, 900), device: "phone v" + VERSION }).then(() => {}, () => {});
+}
+window.addEventListener("error", (e) => logEvent("js-error", `${e.message} @${e.lineno}`));
+window.addEventListener("unhandledrejection", (e) => logEvent("js-error", String(e.reason && e.reason.message || e.reason)));
 
 /* ---------------- voice ---------------- */
 let voice = null, muted = false;
@@ -16,6 +24,7 @@ function pickVoice() {
 }
 speechSynthesis.onvoiceschanged = pickVoice; pickVoice();
 function say(text, card) {
+  logEvent("say", text);
   $("reply").textContent = text;
   if (card) showCard(card.title, card.body);
   if (muted || !text) return;
@@ -29,7 +38,7 @@ function say(text, card) {
 }
 function setOrb(s) {
   $("orb").className = "orb " + s;
-  $("state").textContent = { listening: "Listening…", thinking: "Thinking…", speaking: "Speaking" }[s] || "Tap the orb and speak";
+  $("state").textContent = { listening: "Listening…", thinking: "Thinking…", speaking: "Speaking" }[s] || "Tap the orb and speak · v" + VERSION;
 }
 function showCard(title, body) {
   const c = $("card"); c.hidden = !title && !body; c.innerHTML = "";
@@ -49,7 +58,7 @@ function listen() {
     let t = ""; for (const r of e.results) t += r[0].transcript;
     $("heard").textContent = t; if (e.results[e.results.length - 1].isFinal) final = t;
   };
-  rec.onerror = (e) => { if (e.error !== "no-speech" && e.error !== "aborted") say("Microphone error: " + e.error); };
+  rec.onerror = (e) => { logEvent("mic-error", e.error); if (e.error !== "no-speech" && e.error !== "aborted") say("Microphone error: " + e.error); };
   rec.onend = () => { rec = null; setOrb(""); if (final.trim()) handle(final.trim()); };
   setOrb("listening"); rec.start();
 }
@@ -89,6 +98,7 @@ const PREFIX = /^(?:(?:hey|ok|okay)\s+)?(?:jarvis\s+)?(?:(?:can|could|would|will
 async function handle(raw) {
   const f = fold(raw).replace(PREFIX, "").replace(/\s+please$/, "").trim();
   $("heard").textContent = raw; setOrb("thinking");
+  logEvent("heard", raw);
   try {
     let m;
     // PC control
@@ -138,7 +148,7 @@ async function handle(raw) {
     // anything else: the phone's own AI brain (Supabase Edge Function -> Gemini)
     return askBrain(raw);
   } catch (e) {
-    console.error(e); say("Something went wrong: " + (e.message || e));
+    console.error(e); logEvent("error", (e.message || e) + " | " + raw); say("Something went wrong: " + (e.message || e));
   }
 }
 
@@ -320,6 +330,7 @@ async function startNav(target, mode) {
   let pos; try { pos = await here(); } catch { return say("I need your location. Allow location access for Jarvis in Settings."); }
   const dest = await findDest(target, pos);
   if (!dest) return say("I couldn't find " + target + ".");
+  logEvent("nav", `${target} -> ${dest.name} (${(km(pos, dest.at)).toFixed(2)} km, ${mode})`);
   const rt = await osrm(pos, dest.at, mode);
   if (!rt) return say("I couldn't calculate a route.");
   nav = { dest, mode, rt, step: 1, off: 0, start: pos };
